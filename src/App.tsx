@@ -525,17 +525,19 @@ export default function App() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold text-slate-800 dark:text-white tracking-tight">
+                <h1 
+                  id="workspace-header-title"
+                  className={`text-2xl font-bold tracking-tight transition-colors ${
+                    profile.lowBandwidthMode 
+                      ? 'text-white' 
+                      : 'text-slate-900 dark:text-white'
+                  }`}
+                >
                   {dashboardView === 'gamification' 
                     ? 'Student Gamification & Honor Hub'
                     : `Active Workspace: ${activeModule ? activeModule.title : currentSubject?.modules.find(m => m.status === 'in_progress')?.title || 'Fractions & Decimals'}`}
                 </h1>
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {dashboardView === 'gamification'
-                  ? 'XP Mastery Engine • Socratic Inquiry • Daily Streaks • Badges'
-                  : `Calibrated for ${profile.classLevel} • Socratic Inquiry & Diagnostic Mastery`}
-              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 shrink-0">
