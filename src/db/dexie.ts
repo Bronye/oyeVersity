@@ -7,7 +7,8 @@ import {
   KnowledgeGap, 
   MarketItem, 
   RewardAchievement, 
-  ChatMessage 
+  ChatMessage,
+  PendingQuizSync
 } from '../types';
 import { 
   INITIAL_SUBJECTS, 
@@ -26,6 +27,7 @@ export class OyeVersityDatabase extends Dexie {
   marketItems!: Table<MarketItem, string>;
   achievements!: Table<RewardAchievement, string>;
   chatMessages!: Table<ChatMessage, string>;
+  pendingQuizSync!: Table<PendingQuizSync, string>;
 
   constructor() {
     super('OyeVersityDB');
@@ -38,6 +40,18 @@ export class OyeVersityDatabase extends Dexie {
       marketItems: 'id, category, purchased',
       achievements: 'id, unlocked',
       chatMessages: 'id, timestamp, sender'
+    });
+
+    this.version(2).stores({
+      userProfiles: 'id, name, classLevel',
+      subjects: 'id, subject_id, class',
+      flashcards: 'id, subjectId, mastered',
+      quizzes: 'id, subjectId, difficulty',
+      knowledgeGaps: 'id, subjectId, status',
+      marketItems: 'id, category, purchased',
+      achievements: 'id, unlocked',
+      chatMessages: 'id, timestamp, sender',
+      pendingQuizSync: 'id, quizId, subjectId, synced, timestamp'
     });
   }
 }
@@ -211,5 +225,107 @@ export async function addKnowledgeGap(gap: KnowledgeGap): Promise<void> {
     await db.knowledgeGaps.put(gap);
   } catch (err) {
     console.warn('Failed to add knowledge gap:', err);
+  }
+}
+
+export async function getChatMessages(): Promise<ChatMessage[]> {
+  try {
+    const list = await db.chatMessages.orderBy('timestamp').toArray();
+    return list;
+  } catch (err) {
+    console.warn('Failed to fetch chat messages from Dexie:', err);
+    return [];
+  }
+}
+
+export async function saveChatMessage(message: ChatMessage): Promise<void> {
+  try {
+    await db.chatMessages.put(message);
+  } catch (err) {
+    console.warn('Failed to save chat message to Dexie:', err);
+  }
+}
+
+export async function clearChatMessages(): Promise<void> {
+  try {
+    await db.chatMessages.clear();
+  } catch (err) {
+    console.warn('Failed to clear chat messages:', err);
+  }
+}
+
+/**
+ * Save quiz results to offline queue when disconnected
+ */
+export async function savePendingQuizResult(item: Omit<PendingQuizSync, 'id' | 'synced'>): Promise<PendingQuizSync> {
+  const pendingRecord: PendingQuizSync = {
+    ...item,
+    id: `sync-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    synced: false
+  };
+  try {
+    await db.pendingQuizSync.put(pendingRecord);
+  } catch (err) {
+    console.warn('Failed to save pending quiz to Dexie, fallback to localStorage:', err);
+    try {
+      const existing = JSON.parse(localStorage.getItem('oyeVersity_pending_quizzes') || '[]');
+      existing.push(pendingRecord);
+      localStorage.setItem('oyeVersity_pending_quizzes', JSON.stringify(existing));
+    } catch (lsErr) {}
+  }
+  return pendingRecord;
+}
+
+/**
+ * Retrieve all pending unsynced quiz attempts
+ */
+export async function getUnsyncedQuizResults(): Promise<PendingQuizSync[]> {
+  try {
+    const list = await db.pendingQuizSync.where('synced').equals(0 as any).or('synced').equals(false as any).toArray();
+    if (list.length > 0) return list;
+  } catch (err) {
+    console.warn('Dexie pending quiz query failed, checking localStorage:', err);
+  }
+
+  try {
+    const raw = localStorage.getItem('oyeVersity_pending_quizzes');
+    if (raw) {
+      const parsed: PendingQuizSync[] = JSON.parse(raw);
+      return parsed.filter(p => !p.synced);
+    }
+  } catch (e) {}
+
+  return [];
+}
+
+/**
+ * Mark a queued quiz result as synced with the AI
+ */
+export async function markQuizResultSynced(syncId: string): Promise<void> {
+  try {
+    await db.pendingQuizSync.update(syncId, { synced: true });
+  } catch (err) {}
+
+  try {
+    const raw = localStorage.getItem('oyeVersity_pending_quizzes');
+    if (raw) {
+      const parsed: PendingQuizSync[] = JSON.parse(raw);
+      const updated = parsed.map(p => p.id === syncId ? { ...p, synced: true } : p);
+      localStorage.setItem('oyeVersity_pending_quizzes', JSON.stringify(updated));
+    }
+  } catch (e) {}
+}
+
+/**
+ * Persist custom imported curriculum into offline database
+ */
+export async function saveCustomCurriculumPlan(subjects: SubjectData[]): Promise<void> {
+  if (!subjects || subjects.length === 0) return;
+  try {
+    for (const sub of subjects) {
+      await db.subjects.put(sub);
+    }
+  } catch (err) {
+    console.warn('Failed to save custom subjects to Dexie:', err);
   }
 }

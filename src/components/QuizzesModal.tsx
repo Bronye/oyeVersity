@@ -16,6 +16,7 @@ import { Quiz, QuizQuestion, KnowledgeGap } from '../types';
 import { sounds } from '../utils/audio';
 import { fireConfetti } from '../utils/confetti';
 import { useGamificationStore } from '../store/useGamificationStore';
+import { savePendingQuizResult } from '../db/dexie';
 
 interface QuizzesModalProps {
   quizzes: Quiz[];
@@ -104,39 +105,70 @@ export const QuizzesModal: React.FC<QuizzesModalProps> = ({
 
     if (errors.length > 0) {
       setIsAnalyzingGap(true);
+      let detected: any = null;
+
       try {
-        const response = await fetch('/api/gemini/diagnose-gap', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            missedQuestions: errors,
-            subjectName
-          })
-        });
+        if (navigator.onLine) {
+          const response = await fetch('/api/gemini/diagnose-gap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              missedQuestions: errors,
+              subjectName
+            })
+          });
 
-        const data = await response.json();
-        const detected = data.detectedGap;
-
-        if (detected) {
-          setDiagnosticFeedback(detected);
-          const newGap: KnowledgeGap = {
-            id: `gap-${Date.now()}`,
-            subjectId: activeQuiz.subjectId,
-            subjectName,
-            topic: detected.topic || errors[0].gapTopic,
-            missedCount: errors.length,
-            diagnosticNote: detected.diagnosticNote,
-            everydayAnalogyFix: detected.everydayAnalogyFix,
-            status: 'active',
-            detectedAt: new Date().toISOString().split('T')[0]
-          };
-          onNewKnowledgeGapDetected(newGap);
+          if (response.ok) {
+            const data = await response.json();
+            detected = data.detectedGap;
+          }
         }
       } catch (err) {
-        console.error('Gap diagnostic error:', err);
-      } finally {
-        setIsAnalyzingGap(false);
+        console.warn('Network gap diagnosis unavailable, queuing offline:', err);
       }
+
+      // If offline or network unavailable, queue in offline database and use local diagnostic
+      if (!detected) {
+        try {
+          await savePendingQuizResult({
+            quizId: activeQuiz.id,
+            quizTitle: activeQuiz.title,
+            subjectId: activeQuiz.subjectId,
+            subjectName,
+            score: finalScore,
+            totalQuestions: total,
+            missedQuestions: errors,
+            timestamp: Date.now()
+          });
+        } catch (qErr) {
+          console.warn('Failed to queue quiz result:', qErr);
+        }
+
+        const fallbackTopic = errors[0]?.gapTopic || `${subjectName} Concept`;
+        detected = {
+          topic: fallbackTopic,
+          diagnosticNote: `You had difficulty with: "${errors[0]?.question}". Reviewing the underlying everyday connection will solidify this for tests.`,
+          everydayAnalogyFix: errors[0]?.everydayAnalogy || 'Like balancing a scale evenly before weighing provisions.',
+          isOfflineQueued: true
+        };
+      }
+
+      if (detected) {
+        setDiagnosticFeedback(detected);
+        const newGap: KnowledgeGap = {
+          id: `gap-${Date.now()}`,
+          subjectId: activeQuiz.subjectId,
+          subjectName,
+          topic: detected.topic || errors[0].gapTopic,
+          missedCount: errors.length,
+          diagnosticNote: detected.diagnosticNote,
+          everydayAnalogyFix: detected.everydayAnalogyFix,
+          status: 'active',
+          detectedAt: new Date().toISOString().split('T')[0]
+        };
+        onNewKnowledgeGapDetected(newGap);
+      }
+      setIsAnalyzingGap(false);
     }
   };
 
@@ -229,6 +261,13 @@ export const QuizzesModal: React.FC<QuizzesModalProps> = ({
                       <strong className="text-orange-600">Everyday Mental Model:</strong> {diagnosticFeedback.everydayAnalogyFix}
                     </div>
                   </div>
+
+                  {diagnosticFeedback.isOfflineQueued && (
+                    <div className="text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 p-2 rounded-lg flex items-center gap-1.5">
+                      <span>⚡</span>
+                      <span><strong>Offline Mode:</strong> Quiz results & missed questions are saved in your offline queue. Deep AI diagnostics will sync automatically when you are online!</span>
+                    </div>
+                  )}
 
                   <div className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-950/60 p-2 rounded-lg">
                     ✨ A new <strong>Side-Quest</strong> has been generated and pinned to your Learning Path to help you master this!

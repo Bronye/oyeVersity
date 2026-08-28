@@ -10,7 +10,10 @@ import {
   addKnowledgeGap,
   updateFlashcardStatus,
   addFlashcard,
-  addQuiz
+  addQuiz,
+  getUnsyncedQuizResults,
+  markQuizResultSynced,
+  saveCustomCurriculumPlan
 } from './db/dexie';
 import { 
   UserProfile, 
@@ -56,6 +59,7 @@ export default function App() {
     totalXp: 450,
     lastHiScore: 92,
     weeklyStudyMinutes: 185,
+    rank: 'Novice Scholar',
     lowBandwidthMode: false,
     cognitiveStyle: 'everyday-analogy',
     parentPin: '1234',
@@ -199,6 +203,59 @@ export default function App() {
     }
 
     loadAppData();
+  }, []);
+
+  // Pillar 3: Auto-sync offline pending quizzes whenever the app comes online or connects
+  useEffect(() => {
+    async function syncOfflinePendingQuizzes() {
+      if (!navigator.onLine) return;
+      try {
+        const pending = await getUnsyncedQuizResults();
+        if (!pending || pending.length === 0) return;
+
+        for (const item of pending) {
+          try {
+            const resp = await fetch('/api/gemini/diagnose-gap', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                missedQuestions: item.missedQuestions,
+                subjectName: item.subjectName
+              })
+            });
+
+            if (resp.ok) {
+              const data = await resp.json();
+              if (data?.detectedGap) {
+                const newGap: KnowledgeGap = {
+                  id: `gap-sync-${Date.now()}-${item.id}`,
+                  subjectId: item.subjectId,
+                  subjectName: item.subjectName,
+                  topic: data.detectedGap.topic || item.quizTitle,
+                  missedCount: item.missedQuestions.length,
+                  diagnosticNote: data.detectedGap.diagnosticNote,
+                  everydayAnalogyFix: data.detectedGap.everydayAnalogyFix,
+                  status: 'active',
+                  detectedAt: new Date().toISOString().split('T')[0]
+                };
+                await handleNewKnowledgeGap(newGap);
+              }
+            }
+            if (item.id) {
+              await markQuizResultSynced(item.id);
+            }
+          } catch (itemErr) {
+            console.warn('Sync attempt for quiz deferred to next connection:', itemErr);
+          }
+        }
+      } catch (err) {
+        console.warn('Offline quiz sync listener notice:', err);
+      }
+    }
+
+    syncOfflinePendingQuizzes();
+    window.addEventListener('online', syncOfflinePendingQuizzes);
+    return () => window.removeEventListener('online', syncOfflinePendingQuizzes);
   }, []);
 
   // Save profile updates to Dexie
@@ -421,6 +478,45 @@ export default function App() {
         })
       });
       const data = await response.json();
+
+      if (Array.isArray(data.flashcards) && data.flashcards.length > 0) {
+        for (const f of data.flashcards) {
+          const card: Flashcard = {
+            id: f.id || `inline-fc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            subjectId: activeSubjectId,
+            front: f.front,
+            back: f.back,
+            analogy: f.analogy,
+            mastered: false,
+            reviewCount: 0
+          };
+          await addFlashcard(card);
+          setFlashcards(prev => [card, ...prev]);
+        }
+      }
+
+      if (data.quiz && Array.isArray(data.quiz.questions) && data.quiz.questions.length > 0) {
+        const quiz: Quiz = {
+          id: data.quiz.id || `inline-quiz-${Date.now()}`,
+          subjectId: activeSubjectId,
+          title: data.quiz.title || `${data.topic || 'Practice'} Quick Check`,
+          difficulty: 'medium',
+          xpReward: 30,
+          sparksReward: 20,
+          questions: data.quiz.questions.map((q: any, idx: number) => ({
+            id: q.id || `q-${Date.now()}-${idx}`,
+            question: q.question,
+            options: q.options,
+            correctIndex: q.correctIndex,
+            explanation: q.explanation,
+            everydayAnalogy: q.everydayAnalogy,
+            gapTopic: data.topic || 'General Practice'
+          }))
+        };
+        await addQuiz(quiz);
+        setQuizzes(prev => [quiz, ...prev]);
+      }
+
       setInlineAmoyeMessages(prev => [
         ...prev, 
         { 
@@ -669,9 +765,11 @@ export default function App() {
           {/* Conditional Main View: Gamification Hub OR Socratic Workspace */}
           {dashboardView === 'gamification' ? (
             <GamificationHub 
-              onOpenQuiz={() => setActiveOverlay('quizzes')}
-              onOpenAmoye={() => setActiveOverlay('askAmoye')}
+              onOpenAskAmoye={() => setActiveOverlay('askAmoye')}
+              onOpenQuizzes={() => setActiveOverlay('quizzes')}
               onOpenFlashcards={() => setActiveOverlay('flashcards')}
+              onOpenRewards={() => setActiveOverlay('rewards')}
+              onOpenStudyNotes={() => setActiveOverlay('studyTools')}
             />
           ) : (
             /* 2-Column Grid (Ask Amoye + Diagnostic / Study Pack) */
@@ -777,9 +875,9 @@ export default function App() {
                           subjectId: currentSubject?.subject_id || 'math-jss1',
                           title: 'Equivalence & Portions Sprint',
                           reason: 'Diagnosed struggle in equivalent fractions ratio conversion',
+                          gapTopic: 'Fractions & Proportions',
                           sparksReward: 40,
-                          status: 'available' as const,
-                          questionsCount: 3
+                          status: 'available' as const
                         };
                         setActiveSideQuest(targetQuest);
                         setActiveOverlay('sideQuest');
@@ -895,9 +993,18 @@ export default function App() {
       {activeOverlay === 'askAmoye' && (
         <AskAmoyeWorkspace
           profile={profile}
-          onClose={() => setActiveOverlay(null)}
+          subjectName={currentSubject?.subject_name || 'Mathematics'}
+          initialPrompt={amoyeInitialPrompt || undefined}
+          onClose={() => {
+            setAmoyeInitialPrompt(null);
+            setActiveOverlay(null);
+          }}
           onSaveFlashcards={(cards) => {
             cards.forEach(c => handleAddCard(c));
+          }}
+          onSaveQuiz={(newQuiz) => {
+            addQuiz(newQuiz);
+            setQuizzes(prev => [newQuiz, ...prev]);
           }}
         />
       )}
@@ -996,8 +1103,13 @@ export default function App() {
       {(!profile.isOnboarded || activeOverlay === 'onboarding') && (
         <OnboardingModal
           initialProfile={profile}
-          onComplete={(updated) => {
-            handleUpdateProfile(updated);
+          onComplete={async (updated, customSubjects) => {
+            await handleUpdateProfile(updated);
+            if (customSubjects && customSubjects.length > 0) {
+              setSubjects(customSubjects);
+              setActiveSubjectId(customSubjects[0].subject_id);
+              await saveCustomCurriculumPlan(customSubjects);
+            }
             setActiveOverlay(null);
           }}
           onClose={profile.isOnboarded ? () => setActiveOverlay(null) : undefined}

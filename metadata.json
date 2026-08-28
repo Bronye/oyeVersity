@@ -1,6 +1,6 @@
 {
   "name": "Òyè-versity: AI Education Access Assistant",
   "description": "A lightweight, intelligent AI education access assistant designed for students in underserved communities with offline-first study tools, Socratic guardrails, age-adaptive learning, and everyday socioeconomic analogies.",
-  "requestFramePermissions": ["microphone"],
+  "requestFramePermissions": ["microphone", "camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

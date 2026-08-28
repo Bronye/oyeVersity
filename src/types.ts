@@ -107,8 +107,8 @@ export interface Quiz {
   difficulty?: 'Easy' | 'Medium' | 'Challenge' | string;
   class?: string;
   questions: QuizQuestion[];
-  xpReward: number;
-  sparksReward: number;
+  xpReward?: number;
+  sparksReward?: number;
 }
 
 export interface KnowledgeGap {
@@ -134,6 +134,10 @@ export interface ChatMessage {
   analogy?: string;
   imageUri?: string;
   isDirectAnswerAttempt?: boolean;
+  isHomeworkOrTest?: boolean;
+  topic?: string;
+  generatedFlashcards?: Flashcard[];
+  generatedQuiz?: Quiz;
   socraticStep?: {
     stepNumber: number;
     totalSteps: number;
@@ -183,4 +187,25 @@ export interface TelemetryLog {
   quizzesSolved: number;
   cardsMastered: number;
   accuracyRate: number;
+}
+
+export interface PendingQuizSync {
+  id: string;
+  quizId: string;
+  quizTitle: string;
+  subjectId: string;
+  subjectName: string;
+  score: number;
+  total: number;
+  missedQuestions: QuizQuestion[];
+  timestamp: number;
+  synced: boolean;
+}
+
+export interface CurriculumImportResult {
+  learningPlanTitle: string;
+  classLevel: ClassLevel;
+  sourceUrl?: string;
+  subjects: SubjectData[];
+  overviewNotes?: string;
 }
